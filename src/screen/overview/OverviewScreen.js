@@ -1,34 +1,33 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { decode, encode } from 'base-64'
 import React from 'react'
-import { Platform } from 'react-native'
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Image,
   PermissionsAndroid,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  Button,
 } from 'react-native'
 import { BleManager } from 'react-native-ble-plx'
 import { Icon } from 'react-native-elements'
 import Modal from 'react-native-modal'
 import { fetchMe } from '../../api/auth/authAPI'
-import { decode, encode } from 'base-64'
-import { fakeDeviceList } from '../../utils/fakeDeviceInfo'
+
 const { width, height } = Dimensions.get('window')
 const myServiceUUID = '12345678-1234-1234-1234-12345678910a'
-// const TempChar = '12345678-1234-1234-1234-12345678910a'
-// const Spo2Char = '12345678-1234-1234-1234-12345678910b'
-// const HeartChar = '12345678-1234-1234-1234-12345678910c'
+
 const device_ch = '12345678-1234-1234-1234-12345678910b'
 const data_ch = '12345678-1234-1234-1234-12345678910a'
 export default function OverviewScreen({ navigation, route }) {
-  const [focus, setFocus] = React.useState(new Date().getDate().toString())
+  const [focus, setFocus] = React.useState(
+    `${new Date().getDate()}/${new Date().getMonth()}/${new Date().getFullYear()}`
+  )
   const [tab, setTab] = React.useState('activity')
   const [email, setEmail] = React.useState('')
   const [modalVisible, setModalVisible] = React.useState(false)
@@ -42,7 +41,6 @@ export default function OverviewScreen({ navigation, route }) {
   const [heartBeat, setHeartBeat] = React.useState(0)
   const scrollViewRef = React.useRef()
   const manager = new BleManager()
-
   const scanDevice = () => {
     if (bluetoothStatus === 'PoweredOn') {
       setScanLoading(true)
@@ -81,11 +79,11 @@ export default function OverviewScreen({ navigation, route }) {
           text: 'OK',
           onPress: () => {
             manager.enable()
-          }
+          },
         },
         {
-          text: "Cancel",
-        }
+          text: 'Cancel',
+        },
       ])
     }
   }
@@ -266,6 +264,11 @@ export default function OverviewScreen({ navigation, route }) {
       await manager.disable()
       await manager.enable()
       setDeviceInfo([])
+      setEmail('')
+      setHeartBeat(0)
+      setTemperature(0)
+      setCovid(0)
+      setTab('activity')
       await AsyncStorage.clear()
       navigation.navigate('Auth')
     } catch (error) {
@@ -339,20 +342,22 @@ export default function OverviewScreen({ navigation, route }) {
   const renderCurrentWeek = React.useMemo(
     () =>
       getAWeekAgo().map((item) => {
+        const dateItem = new Date(item)
+        const newKey = `${dateItem.getDate()}/${dateItem.getMonth()}/${dateItem.getFullYear()}`
         let arr = item.split(' ')
         return (
           <TouchableOpacity
-            key={arr[2]}
+            key={newKey}
             style={[
               styles.currWeekBtn,
-              focus === arr[2] && { backgroundColor: '#439DEE' },
+              focus === newKey && { backgroundColor: '#439DEE' },
             ]}
-            onPress={() => setFocus(arr[2])}
+            onPress={() => setFocus(newKey)}
           >
             <Text
               style={[
                 styles.btnDayText,
-                focus === arr[2] && { color: '#212437' },
+                focus === newKey && { color: '#212437' },
               ]}
             >
               {arr[0]}
@@ -390,7 +395,12 @@ export default function OverviewScreen({ navigation, route }) {
         </View>
         <TouchableOpacity
           style={styles.goDetail}
-          onPress={() => navigation.navigate('Statistic')}
+          onPress={() =>
+            navigation.navigate('Statistic', {
+              email: email || route?.params?.email,
+              date: focus,
+            })
+          }
         >
           <View style={styles.overviewComponent}>
             <Icon
@@ -495,27 +505,6 @@ export default function OverviewScreen({ navigation, route }) {
           >
             {bluetoothStatus}
           </Text>
-          {/* {bluetoothStatus === 'PoweredOff' && (
-            <TouchableOpacity
-              style={{
-                marginTop: 25,
-                backgroundColor: 'white',
-                borderRadius: 10,
-                padding: 15,
-                width: 0.75 * width,
-              }}
-              onPress={() => manager.enable()}
-            >
-              <Text
-                style={[
-                  styles.headerText,
-                  { textAlign: 'center', fontSize: 15 },
-                ]}
-              >
-                TURN ON BLUETOOTH
-              </Text>
-            </TouchableOpacity>
-          )} */}
           <TouchableOpacity
             style={{
               marginTop: 25,

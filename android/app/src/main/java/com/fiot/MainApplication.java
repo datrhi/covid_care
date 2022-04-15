@@ -7,6 +7,8 @@ import androidx.annotation.NonNull;
 
 import com.facebook.react.PackageList;
 import com.facebook.react.ReactApplication;
+import com.swmansion.gesturehandler.RNGestureHandlerPackage;
+import com.horcrux.svg.SvgPackage;
 import com.reactnativecommunity.asyncstorage.AsyncStoragePackage;
 import org.devio.rn.splashscreen.SplashScreenReactPackage;
 import com.facebook.react.ReactInstanceManager;
