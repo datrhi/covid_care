@@ -119,7 +119,7 @@ export default function AuthScreen({ navigation }) {
         )}
         <TouchableOpacity
           style={styles.forgotPassword}
-          onPress={() => navigation.navigate('NoData')}
+          onPress={() => navigation.navigate('ForgotPassword')}
         >
           <Text style={{ color: '#439DEE', fontWeight: 'bold' }}>
             Forgot Password?
@@ -162,7 +162,7 @@ export default function AuthScreen({ navigation }) {
         />
         <TouchableOpacity
           style={styles.forgotPassword}
-          onPress={() => navigation.navigate('NoData')}
+          onPress={() => navigation.navigate('ForgotPassword')}
         >
           <Text style={{ color: '#439DEE', fontWeight: 'bold' }}>
             Forgot Password?
@@ -233,7 +233,6 @@ export default function AuthScreen({ navigation }) {
               </Text>
             )}
           </TouchableOpacity>
-          <Text>{}</Text>
           <TouchableOpacity onPress={() => navigation.navigate('NoData')}>
             <Text style={{ color: '#439DEE', fontWeight: 'bold' }}>
               Privacy Policy

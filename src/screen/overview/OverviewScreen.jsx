@@ -18,6 +18,7 @@ import { BleManager } from 'react-native-ble-plx'
 import { Icon } from 'react-native-elements'
 import Modal from 'react-native-modal'
 import { fetchMe } from '../../api/auth/authAPI'
+import { createOneMetric, getLatestData } from '../../api/auth/metricAPI'
 
 const { width, height } = Dimensions.get('window')
 const myServiceUUID = '12345678-1234-1234-1234-12345678910a'
@@ -179,6 +180,52 @@ export default function OverviewScreen({ navigation, route }) {
     }
   }
 
+  const handleFetchOneMetric = async (data) => {
+    try {
+      const token = await AsyncStorage.getItem('token')
+      if (!token) {
+        navigation.navigate('Auth')
+        return null
+      }
+      const accessToken = `Bearer ${token}`
+
+      const res = await createOneMetric(accessToken, {
+        data,
+      })
+
+      if (res && res.data && res.data.success) {
+        return null
+      }
+      throw new Error(res.data.message || 'Error')
+    } catch (error) {
+      console.log(error.toString())
+      Alert.alert('Failure', `${error.toString()}`, [{ text: 'OK' }])
+    }
+  }
+
+  const handleFetchingLatest = async () => {
+    try {
+      const token = await AsyncStorage.getItem('token')
+      if (!token) {
+        navigation.navigate('Auth')
+        return null
+      }
+      const accessToken = `Bearer ${token}`
+
+      const res = await getLatestData(accessToken, { date: focus })
+      if (res && res.data && res.data.success) {
+        const { temperature, spo2, heartBeat } = res.data.data[0]
+        setTemperature(temperature)
+        setCovid(spo2)
+        setHeartBeat(heartBeat)
+        return null
+      }
+      throw new Error(res.data.message || 'Error')
+    } catch (error) {
+      console.log(error.toString())
+      Alert.alert('Failure', `${error.toString()}`, [{ text: 'OK' }])
+    }
+  }
   const monitor = async (id) => {
     // Alert.alert('Test', `${myServiceUUID}\n${data_ch}`, [
     //   {
@@ -212,6 +259,11 @@ export default function OverviewScreen({ navigation, route }) {
               if (decode(char.value).charCodeAt(5) === 2) {
                 setIsRequest(false)
               }
+              handleFetchOneMetric({
+                temperature: temp,
+                spo2: cov,
+                heartBeat: beat,
+              })
             }
 
             if (decode(char.value).charCodeAt(0) === 6) {
@@ -317,11 +369,12 @@ export default function OverviewScreen({ navigation, route }) {
       // }
       await manager.disable()
       await manager.enable()
+
       setDeviceInfo([])
       setEmail('')
-      setHeartBeat(0)
-      setTemperature(0)
-      setCovid(0)
+      setHeartBeat(-1)
+      setTemperature(-1)
+      setCovid(-1)
       setTab('activity')
       await AsyncStorage.clear()
       navigation.navigate('Auth')
@@ -512,7 +565,7 @@ export default function OverviewScreen({ navigation, route }) {
         </TouchableOpacity>
       </View>
     ),
-    [sendSignal, connectedDevice.length, temperature, covid, heartBeat]
+    [requestData, connectedDevice.length, temperature, covid, heartBeat]
   )
   const renderDashboard = () => (
     <View style={styles.dashboardContainer}>
@@ -765,11 +818,53 @@ export default function OverviewScreen({ navigation, route }) {
               marginTop: 15,
               backgroundColor: 'white',
               borderRadius: 10,
-              padding: 25,
+              padding: 18,
+              width: 0.5 * width,
             }}
           >
-            <TouchableOpacity onPress={() => handleLogout()}>
-              <Text style={styles.headerText}>Logout</Text>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('ChangePassword')}
+            >
+              <Text
+                style={[
+                  styles.headerText,
+                  { fontSize: 18, textAlign: 'center' },
+                ]}
+              >
+                Change Password
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View
+            style={{
+              marginTop: 15,
+              backgroundColor: 'white',
+              borderRadius: 10,
+              padding: 18,
+              width: 0.5 * width,
+            }}
+          >
+            <TouchableOpacity
+              onPress={() =>
+                Alert.alert('Logout', 'Are you sure you want to log out', [
+                  {
+                    text: 'Cancel',
+                  },
+                  {
+                    text: 'OK',
+                    onPress: () => handleLogout(),
+                  },
+                ])
+              }
+            >
+              <Text
+                style={[
+                  styles.headerText,
+                  { fontSize: 18, textAlign: 'center' },
+                ]}
+              >
+                Logout
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -790,6 +885,9 @@ export default function OverviewScreen({ navigation, route }) {
     requestLocationPermission()
   }, [handleFetchMe, requestLocationPermission])
 
+  React.useEffect(() => {
+    handleFetchingLatest()
+  }, [focus])
   return (
     <View style={{ flex: 1 }}>
       {tab === 'activity' && renderActivity}

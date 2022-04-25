@@ -8,6 +8,8 @@ import OverviewScreen from './src/screen/overview/OverviewScreen'
 import SplashScreen from 'react-native-splash-screen'
 import OnboardingScreen from './src/screen/onboarding/OnboardingScreen'
 import StatisticScreen from './src/screen/stat/StatisticScreen'
+import ChangePasswordScreen from './src/screen/changepassword/ChangePasswordScreen'
+import ForgotPasswordScreen from './src/screen/forgotpassword/ForgotPasswordScreen'
 
 const Stack = createNativeStackNavigator()
 const { Navigator, Screen } = Stack
@@ -26,6 +28,8 @@ export default function App() {
         <Screen name="Auth" component={AuthScreen} />
         <Screen name="Statistic" component={StatisticScreen} />
         <Screen name="TestUtil" component={TestUtilScreen} />
+        <Screen name="ChangePassword" component={ChangePasswordScreen} />
+        <Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         <Screen name="NoData" component={NoDataScreen} />
       </Navigator>
     </NavigationContainer>

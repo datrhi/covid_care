@@ -24,3 +24,20 @@ export async function fetchMe(token) {
     },
   })
 }
+export async function changePassword(token, data) {
+  return await axios({
+    url: `${baseURL}/change-password`,
+    method: 'POST',
+    headers: {
+      Authorization: token,
+    },
+    data,
+  })
+}
+export async function forgotPassword(data) {
+  return await axios({
+    url: `${baseURL}/forgot-password`,
+    method: 'POST',
+    data,
+  })
+}
