@@ -233,11 +233,11 @@ export default function AuthScreen({ navigation }) {
               </Text>
             )}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('NoData')}>
+          {/* <TouchableOpacity onPress={() => navigation.navigate('NoData')}>
             <Text style={{ color: '#439DEE', fontWeight: 'bold' }}>
               Privacy Policy
             </Text>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

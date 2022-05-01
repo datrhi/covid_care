@@ -21,3 +21,23 @@ export async function getLatestData(token, params) {
     params
   })
 }
+export async function getDataForChart(token, params) {
+  return await axios({
+    url: `${baseURL}/get-all-metric`,
+    method: 'GET',
+    headers: {
+      Authorization: token,
+    },
+    params
+  })
+}
+export async function saveMetric(token, data) {
+  return await axios({
+    url: `${baseURL}/save-metric`,
+    method: 'POST',
+    headers: {
+      Authorization: token,
+    },
+    data
+  })
+}

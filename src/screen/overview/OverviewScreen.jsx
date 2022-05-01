@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { decode, encode } from 'base-64'
+import moment from 'moment'
 import React from 'react'
 import {
   ActivityIndicator,
@@ -18,13 +19,19 @@ import { BleManager } from 'react-native-ble-plx'
 import { Icon } from 'react-native-elements'
 import Modal from 'react-native-modal'
 import { fetchMe } from '../../api/auth/authAPI'
-import { createOneMetric, getLatestData } from '../../api/auth/metricAPI'
+import {
+  createOneMetric,
+  getLatestData,
+  saveMetric,
+} from '../../api/auth/metricAPI'
 
 const { width, height } = Dimensions.get('window')
 const myServiceUUID = '12345678-1234-1234-1234-12345678910a'
 
 const device_ch = '12345678-1234-1234-1234-12345678910b'
 const data_ch = '12345678-1234-1234-1234-12345678910a'
+const manager = new BleManager()
+
 export default function OverviewScreen({ navigation, route }) {
   // UI state
   const [focus, setFocus] = React.useState(
@@ -37,15 +44,13 @@ export default function OverviewScreen({ navigation, route }) {
   // ble state
   const [bluetoothStatus, setBluetoothStatus] = React.useState('PoweredOff')
   const [deviceInfo, setDeviceInfo] = React.useState([])
-  const [connectedDevice, setConnectedDevice] = React.useState([])
-
-  // test
-  const [test, setTest] = React.useState('')
+  const [connectedDevice, setConnectedDevice] = React.useState('')
 
   // metric
   const [temperature, setTemperature] = React.useState(-1)
   const [covid, setCovid] = React.useState(-1)
   const [heartBeat, setHeartBeat] = React.useState(-1)
+  const [timeLastest, setTimeLastest] = React.useState(null)
 
   // scroll ref
   const scrollViewRef = React.useRef()
@@ -55,7 +60,8 @@ export default function OverviewScreen({ navigation, route }) {
   const [isConnecting, setIsConnecting] = React.useState(false)
   const [isRequest, setIsRequest] = React.useState(false)
   const [isLoadingData, setIsLoadingData] = React.useState(false)
-  const manager = new BleManager()
+  const [isFetchLastest, setIsFetchLastest] = React.useState(false)
+
   const scanDevice = () => {
     if (bluetoothStatus === 'PoweredOn') {
       setScanLoading(true)
@@ -102,9 +108,10 @@ export default function OverviewScreen({ navigation, route }) {
       ])
     }
   }
+
   const connectDevice = async (id) => {
     try {
-      setIsConnecting(true)
+      setIsConnecting(id)
       const findDeviceWithId = deviceInfo.filter((item) => item.id === id)
       let device =
         Array.isArray(findDeviceWithId) && findDeviceWithId.length > 0
@@ -120,26 +127,15 @@ export default function OverviewScreen({ navigation, route }) {
       }
       const isConnected = await manager.isDeviceConnected(id)
       if (!isConnected) {
-        device = await manager.connectToDevice(id)
+        device = await manager.connectToDevice(id, {
+          refreshGatt: 'OnConnected',
+          autoConnect: true,
+        })
         await device.discoverAllServicesAndCharacteristics()
       }
-      const currTime = new Date()
       monitor(id)
-      // Send currTime whenever connection
-      await manager.writeCharacteristicWithResponseForDevice(
-        id,
-        myServiceUUID,
-        device_ch,
-        encode(
-          String.fromCharCode(1) +
-            String.fromCharCode(currTime.getDate()) +
-            String.fromCharCode(currTime.getMonth()) +
-            String.fromCharCode(currTime.getYear()) +
-            String.fromCharCode(currTime.getHours()) +
-            String.fromCharCode(currTime.getMinutes()) +
-            String.fromCharCode(currTime.getSeconds())
-        )
-      )
+      handleSendTimeToHardware(id)
+
       // const services = await device.services()
       // const myService = services.filter((item) => item.uuid === myServiceUUID)
       // const characteristics = await device.characteristicsForService(
@@ -160,20 +156,19 @@ export default function OverviewScreen({ navigation, route }) {
             },
           ])
         }
-        if (device) {
-          setConnectedDevice((s) => {
-            const newS = s.filter((item) => item !== device.id)
-            return newS
-          })
-          Alert.alert(
-            'Disconected',
-            `DeviceId: ${device.id} is disconnected!`,
-            [{ text: 'OK' }]
-          )
-        }
+        setIsRequest(false)
+        setIsLoadingData(false)
+        // if (device) {
+        setConnectedDevice('')
+        // Alert.alert(
+        //   'Disconected',
+        //   `DeviceId: ${device.id} is disconnected!`,
+        //   [{ text: 'OK' }]
+        // )
+        // }
       })
-      setConnectedDevice((s) => [...new Set([...s, id])])
-      setIsConnecting(false)
+      setIsConnecting('')
+      setConnectedDevice(id)
     } catch (error) {
       console.log(error)
       Alert.alert('Connecting Error', `${error.toString()}`)
@@ -202,9 +197,32 @@ export default function OverviewScreen({ navigation, route }) {
       Alert.alert('Failure', `${error.toString()}`, [{ text: 'OK' }])
     }
   }
+  const handleSaveMetric = async (data) => {
+    try {
+      const token = await AsyncStorage.getItem('token')
+      if (!token) {
+        navigation.navigate('Auth')
+        return null
+      }
+      const accessToken = `Bearer ${token}`
+
+      const res = await saveMetric(accessToken, {
+        data,
+      })
+
+      if (res && res.data && res.data.success) {
+        return null
+      }
+      throw new Error(res.data.message || 'Error')
+    } catch (error) {
+      console.log(error.toString())
+      Alert.alert('Failure', `${error.toString()}`, [{ text: 'OK' }])
+    }
+  }
 
   const handleFetchingLatest = async () => {
     try {
+      setIsFetchLastest(true)
       const token = await AsyncStorage.getItem('token')
       if (!token) {
         navigation.navigate('Auth')
@@ -214,10 +232,14 @@ export default function OverviewScreen({ navigation, route }) {
 
       const res = await getLatestData(accessToken, { date: focus })
       if (res && res.data && res.data.success) {
-        const { temperature, spo2, heartBeat } = res.data.data[0]
+        const { temperature, spo2, heartBeat } = res.data.data
         setTemperature(temperature)
         setCovid(spo2)
         setHeartBeat(heartBeat)
+        if (res.data.createdAt) {
+          setTimeLastest(() => new Date(res.data.createdAt))
+        }
+        setIsFetchLastest(false)
         return null
       }
       throw new Error(res.data.message || 'Error')
@@ -238,16 +260,22 @@ export default function OverviewScreen({ navigation, route }) {
       data_ch,
       (error, char) => {
         if (error) {
-          Alert.alert('Alert', `${error.errorCode}: ${error.reason}`)
+          console.log(error.errorCode)
+          if (error.errorCode == 201) {
+            connectDevice(id)
+          } else if (error.errorCode != 2) {
+            Alert.alert('Alert', `${error.errorCode}: ${error.reason}`)
+          }
           return null
         }
         if (char.uuid === data_ch) {
           try {
-            if (
-              // decode(char.value).length === 11 &&
-              decode(char.value).charCodeAt(0) === 4
-            ) {
-              setIsLoadingData(false)
+            // header 4 - manual nut nhan app 3 data
+            if (decode(char.value).charCodeAt(0) == 4) {
+              if (decode(char.value).charCodeAt(5) === 0) {
+                setIsLoadingData(false)
+                setTimeLastest(null)
+              }
               const temp =
                 decode(char.value).charCodeAt(1) +
                 decode(char.value).charCodeAt(2) * 0.125
@@ -265,39 +293,59 @@ export default function OverviewScreen({ navigation, route }) {
                 heartBeat: beat,
               })
             }
+            // header 7 - gui dinh ky 1 data
+            if (decode(char.value).charCodeAt(0) == 7) {
+              setTimeLastest(null)
+              const temp =
+                decode(char.value).charCodeAt(1) +
+                decode(char.value).charCodeAt(2) * 0.125
+              const cov = decode(char.value).charCodeAt(3)
+              const beat = decode(char.value).charCodeAt(4)
+              setTemperature(temp)
+              setCovid(cov)
+              setHeartBeat(beat)
 
+              setIsLoadingData(false)
+              setIsRequest(false)
+
+              handleFetchOneMetric({
+                temperature: temp,
+                spo2: cov,
+                heartBeat: beat,
+              })
+            }
+
+            // header 6 - old data
             if (decode(char.value).charCodeAt(0) === 6) {
-              let data = ''
+              let listData = []
               let numberOfData = decode(char.value).charCodeAt(1)
               let iter = 1
               let resDecode = decode(char.value)
-              // test = decode(char.value)
               while (iter <= numberOfData) {
-                let startId = (iter - 1) * 10
-                let temp =
+                let startId = (iter - 1) * 8
+                let temperature =
                   resDecode.charCodeAt(startId + 2) +
                   resDecode.charCodeAt(startId + 3) +
                   0.125
-                let cov = resDecode.charCodeAt(startId + 4)
-                let beat = resDecode.charCodeAt(startId + 5)
-                let date = resDecode.charCodeAt(startId + 6)
+                let spo2 = resDecode.charCodeAt(startId + 4)
+                let heartBeat = resDecode.charCodeAt(startId + 5)
+                let day = resDecode.charCodeAt(startId + 6)
                 let month = resDecode.charCodeAt(startId + 7)
-                let year = resDecode.charCodeAt(startId + 8)
-                let hour = resDecode.charCodeAt(startId + 9)
-                let minute = resDecode.charCodeAt(startId + 10)
-                let second = resDecode.charCodeAt(startId + 11)
-                let newData = `${date}/${month}/${year} ${hour}:${minute}:${second}\nNhiet do: ${temp}, SpO2: ${cov}, Nhip tim: ${beat}\n`
-                data = data + newData
-                // resDecode = resDecode.slice(10)
+                let year = resDecode.charCodeAt(startId + 8) + 1900
+                let hours = resDecode.charCodeAt(startId + 9)
+                listData.push({
+                  temperature,
+                  spo2,
+                  heartBeat,
+                  day,
+                  month,
+                  year,
+                  hours,
+                })
                 iter = iter + 1
               }
-              setTest(data)
-              // Alert.alert(
-              //   'DATA',
-              //   `Total record: ${numberOfData}\nData: ${data}`
-              // )
+              handleSaveMetric({ listData })
             }
-            // let test = decode(char.value)
           } catch (error) {
             Alert.alert('Error', error.toString(), [{ text: 'OK' }])
           }
@@ -309,16 +357,17 @@ export default function OverviewScreen({ navigation, route }) {
   const requestData = async () => {
     try {
       if (connectedDevice.length > 0) {
+        let device
         setIsRequest(true)
         setIsLoadingData(true)
-        const isConnected = await manager.isDeviceConnected(connectedDevice[0])
+        const isConnected = await manager.isDeviceConnected(connectedDevice)
 
         if (!isConnected) {
-          device = await manager.connectToDevice(connectedDevice[0])
+          device = await manager.connectToDevice(connectedDevice)
           await device.discoverAllServicesAndCharacteristics()
         }
         await manager.writeCharacteristicWithResponseForDevice(
-          connectedDevice[0],
+          connectedDevice,
           myServiceUUID,
           device_ch,
           encode(String.fromCharCode(5))
@@ -355,32 +404,33 @@ export default function OverviewScreen({ navigation, route }) {
 
   const handleLogout = async () => {
     try {
-      manager.cancelTransaction('monitoring')
+      await AsyncStorage.clear()
 
-      // if (connectedDevice.length > 0) {
-      //   const isConnected = await manager.isDeviceConnected(connectedDevice[0])
-      //   if (isConnected) {
-      //     await manager.cancelDeviceConnection(connectedDevice[0])
-      //   } else {
-      //     device = await manager.connectToDevice(connectedDevice[0])
-      //     await device.discoverAllServicesAndCharacteristics()
-      //     await manager.cancelDeviceConnection(connectedDevice[0])
-      //   }
-      // }
-      await manager.disable()
-      await manager.enable()
-
+      disconnectDevice()
       setDeviceInfo([])
       setEmail('')
       setHeartBeat(-1)
       setTemperature(-1)
       setCovid(-1)
+      setTimeLastest(null)
       setTab('activity')
-      await AsyncStorage.clear()
       navigation.navigate('Auth')
     } catch (error) {
       console.log(error)
       Alert.alert('Error', 'Cannot logout!')
+    }
+  }
+  const disconnectDevice = async () => {
+    try {
+      setConnectedDevice('')
+      // await manager.cancelDeviceConnection(id)
+      // console.log('disconnect')
+      manager.cancelTransaction('monitoring')
+      await manager.disable()
+      await manager.enable()
+    } catch (error) {
+      console.log(error)
+      Alert.alert('Disconnecting Error', `${error.toString()}`)
     }
   }
   const requestLocationPermission = async () => {
@@ -410,6 +460,24 @@ export default function OverviewScreen({ navigation, route }) {
     } catch (err) {
       console.warn(err)
     }
+  }
+  const handleSendTimeToHardware = async (id) => {
+    const currTime = new Date()
+    // Send currTime whenever connection
+    await manager.writeCharacteristicWithResponseForDevice(
+      id,
+      myServiceUUID,
+      device_ch,
+      encode(
+        String.fromCharCode(1) +
+          String.fromCharCode(currTime.getDate()) +
+          String.fromCharCode(currTime.getMonth()) +
+          String.fromCharCode(currTime.getYear()) +
+          String.fromCharCode(currTime.getHours()) +
+          String.fromCharCode(currTime.getMinutes()) +
+          String.fromCharCode(currTime.getSeconds())
+      )
+    )
   }
   const handleDate = () => {
     const date = new Date(Date.now()).toDateString().split(' ')
@@ -446,433 +514,6 @@ export default function OverviewScreen({ navigation, route }) {
     return 'Unknown'
   }
 
-  const renderCurrentWeek = React.useMemo(
-    () =>
-      getAWeekAgo().map((item) => {
-        const dateItem = new Date(item)
-        const newKey = `${dateItem.getDate()}/${dateItem.getMonth()}/${dateItem.getFullYear()}`
-        let arr = item.split(' ')
-        return (
-          <TouchableOpacity
-            key={newKey}
-            style={[
-              styles.currWeekBtn,
-              focus === newKey && { backgroundColor: '#439DEE' },
-            ]}
-            onPress={() => setFocus(newKey)}
-          >
-            <Text
-              style={[
-                styles.btnDayText,
-                focus === newKey && { color: '#212437' },
-              ]}
-            >
-              {arr[0]}
-            </Text>
-            <Text style={styles.btnDateText}>{arr[2]}</Text>
-          </TouchableOpacity>
-        )
-      }),
-    [setFocus, getAWeekAgo, focus]
-  )
-  const renderOverview = React.useMemo(
-    () => (
-      <View style={styles.overviewContainer}>
-        <View
-          style={{
-            display: 'flex',
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Text
-            style={[
-              styles.headerText,
-              {
-                fontSize: 20,
-              },
-            ]}
-          >
-            Overview
-          </Text>
-          {!isRequest && (
-            <TouchableOpacity onPress={() => requestData()}>
-              <Icon name="reload1" type="ant-design" color={'#000'} />
-            </TouchableOpacity>
-          )}
-        </View>
-        <TouchableOpacity
-          style={styles.goDetail}
-          onPress={() =>
-            navigation.navigate('Statistic', {
-              email: email || route?.params?.email,
-              date: focus,
-            })
-          }
-        >
-          <View style={styles.overviewComponent}>
-            <Icon
-              name="temperature-low"
-              type="font-awesome-5"
-              color="#1BBBCF"
-              style={{
-                width: '30%',
-              }}
-              iconStyle={{ fontSize: 30 }}
-            />
-            {isLoadingData ? (
-              <ActivityIndicator />
-            ) : (
-              <Text style={styles.headerText}>
-                {temperature === -1 ? `-` : temperature}
-              </Text>
-            )}
-            <Text style={styles.btnDayText}>Celsius</Text>
-          </View>
-          <View style={styles.overviewComponent}>
-            <Text style={{ fontSize: 23, color: '#70B854' }}>
-              SpO<Text style={{ fontSize: 13, color: '#70B854' }}>2</Text>
-            </Text>
-            {isLoadingData ? (
-              <ActivityIndicator />
-            ) : (
-              <Text style={styles.headerText}>
-                {covid === -1 ? `-` : covid}
-              </Text>
-            )}
-            <Text style={styles.btnDayText}>%</Text>
-          </View>
-          <View style={styles.overviewComponent}>
-            <Icon
-              name="heartbeat"
-              type="font-awesome"
-              color="#E47272"
-              style={{
-                width: '30%',
-              }}
-              iconStyle={{ fontSize: 30 }}
-            />
-            {isLoadingData ? (
-              <ActivityIndicator />
-            ) : (
-              <Text style={styles.headerText}>
-                {heartBeat === -1 ? `-` : heartBeat}
-              </Text>
-            )}
-            <Text style={styles.btnDayText}>BPM</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-    ),
-    [requestData, connectedDevice.length, temperature, covid, heartBeat]
-  )
-  const renderDashboard = () => (
-    <View style={styles.dashboardContainer}>
-      <TouchableOpacity onPress={() => setTab('activity')}>
-        <Icon
-          name="activity"
-          type="feather"
-          color={tab === 'activity' ? '#439DEE' : '#70789C'}
-        />
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={{
-          backgroundColor: '#439DEE',
-          borderRadius: 20,
-          width: 0.9 * 0.1 * height,
-          height: '90%',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
-        onPress={() => setModalVisible(true)}
-      >
-        <Icon name="plus" type="feather" color="#212437" />
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setTab('settings')}>
-        <Icon
-          name="settings"
-          type="feather"
-          color={tab === 'settings' ? '#439DEE' : '#70789C'}
-        />
-      </TouchableOpacity>
-    </View>
-  )
-  const renderModal = React.useMemo(
-    () => (
-      <Modal
-        isVisible={modalVisible}
-        onBackdropPress={() => setModalVisible(false)}
-        animationOut="slideOutUp"
-      >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: '#F4F3F8',
-            padding: 20,
-            paddingTop: 40,
-            alignItems: 'center',
-          }}
-        >
-          <TouchableOpacity
-            style={{ position: 'absolute', right: 10, top: 10 }}
-            onPress={() => setModalVisible(false)}
-          >
-            <Icon name="closecircleo" type="ant-design" color="#ff0000" />
-          </TouchableOpacity>
-          <Text
-            style={[styles.headerText, { textAlign: 'center' }]}
-          >{`Bluetooth status`}</Text>
-          <Text
-            style={[
-              styles.headerText,
-              { textAlign: 'center', color: '#439DEE' },
-            ]}
-          >
-            {bluetoothStatus}
-          </Text>
-          <TouchableOpacity
-            style={{
-              marginTop: 25,
-              backgroundColor: 'white',
-              borderRadius: 10,
-              padding: 15,
-              width: 0.75 * width,
-            }}
-            disabled={scanLoading}
-            onPress={() => scanDevice()}
-          >
-            <Text
-              style={[styles.headerText, { textAlign: 'center', fontSize: 15 }]}
-            >
-              {scanLoading ? <ActivityIndicator color="#212437" /> : 'SCAN'}
-            </Text>
-          </TouchableOpacity>
-          <Text>{test}</Text>
-          <ScrollView
-            style={{
-              flex: 1,
-              width: '100%',
-              marginTop: 25,
-            }}
-          >
-            {Array.isArray(deviceInfo) &&
-              deviceInfo.length > 0 &&
-              deviceInfo.map((item, id) => (
-                <View
-                  key={id}
-                  style={{
-                    backgroundColor: 'white',
-                    borderRadius: 10,
-                    padding: 10,
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: 10,
-                  }}
-                >
-                  <View>
-                    <View style={styles.deviceInfoRow}>
-                      <Icon
-                        name="perm-device-information"
-                        type="material-icons"
-                        color="#212437"
-                      />
-
-                      <Text style={[styles.headerText, { fontSize: 13 }]}>
-                        {item.id ? `: ${item.id}` : ': Unknown ID'}
-                      </Text>
-                    </View>
-                    <View style={styles.deviceInfoRow}>
-                      <Icon name="user" type="ant-design" color="#212437" />
-                      <Text
-                        style={[styles.headerText, { fontSize: 13 }]}
-                        numberOfLines={1}
-                      >
-                        {item.name
-                          ? item.name.length > 10
-                            ? `: ${item.name.slice(0, 12)}...`
-                            : `: ${item.name}`
-                          : ': ???'}
-                      </Text>
-                    </View>
-                    <View style={styles.deviceInfoRow}>
-                      <Icon
-                        name="signal-cellular-alt"
-                        type="material-icons"
-                        color="#212437"
-                      />
-                      <Text style={[styles.headerText, { fontSize: 13 }]}>
-                        {item.rssi
-                          ? `: ${handleSignal(item.rssi)}`
-                          : `: No signal`}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={{ height: '100%' }}>
-                    <TouchableOpacity
-                      style={[
-                        styles.connectButton,
-                        connectedDevice.includes(item.id)
-                          ? styles.connectedState
-                          : styles.notConnectedState,
-                      ]}
-                      // Không thể connect nếu đang scan
-                      disabled={
-                        scanLoading || connectedDevice.includes(item.id)
-                      }
-                      onPress={() => connectDevice(item.id)}
-                    >
-                      {isConnecting ? (
-                        <ActivityIndicator color="#212437" />
-                      ) : (
-                        <Text style={{ color: '#212437', fontSize: 15 }}>
-                          {connectedDevice?.includes(item.id)
-                            ? 'Connected'
-                            : 'Connect'}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
-          </ScrollView>
-        </View>
-      </Modal>
-    ),
-    [
-      connectDevice,
-      scanLoading,
-      bluetoothStatus,
-      scanDevice,
-      modalVisible,
-      setModalVisible,
-      handleSignal,
-      deviceInfo,
-      connectedDevice,
-      test,
-    ]
-  )
-  const renderActivity = React.useMemo(
-    () => (
-      <ScrollView style={styles.container}>
-        <View style={styles.headerContainer}>
-          <View>
-            <Text style={styles.dateText}>{handleDate()}</Text>
-            <Text style={styles.headerText}>Daily Activity</Text>
-          </View>
-          <Image
-            style={styles.avatarContainer}
-            source={require('../../asset/defaultAvatar.jpg')}
-          />
-        </View>
-        <ScrollView
-          style={styles.currWeek}
-          ref={scrollViewRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          onContentSizeChange={() =>
-            scrollViewRef.current.scrollToEnd({ animated: true })
-          }
-        >
-          {renderCurrentWeek}
-        </ScrollView>
-        {renderOverview}
-        {renderModal}
-      </ScrollView>
-    ),
-    [handleDate, renderCurrentWeek, renderOverview, renderModal]
-  )
-  const renderSettings = React.useMemo(
-    () => (
-      <ScrollView style={styles.container}>
-        <View style={styles.headerContainer}>
-          <View>
-            <Text style={styles.dateText}>{handleDate()}</Text>
-            <Text style={styles.headerText}>Settings</Text>
-          </View>
-          <Image
-            style={styles.avatarContainer}
-            source={require('../../asset/defaultAvatar.jpg')}
-          />
-        </View>
-        <View
-          style={[
-            styles.overviewContainer,
-            { display: 'flex', justifyContent: 'center', alignItems: 'center' },
-          ]}
-        >
-          <Text
-            style={[
-              styles.headerText,
-              {
-                fontSize: 20,
-                opacity: 0.7,
-              },
-            ]}
-          >{`Hi, ${email || route?.params?.email}!`}</Text>
-          <View
-            style={{
-              marginTop: 15,
-              backgroundColor: 'white',
-              borderRadius: 10,
-              padding: 18,
-              width: 0.5 * width,
-            }}
-          >
-            <TouchableOpacity
-              onPress={() => navigation.navigate('ChangePassword')}
-            >
-              <Text
-                style={[
-                  styles.headerText,
-                  { fontSize: 18, textAlign: 'center' },
-                ]}
-              >
-                Change Password
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View
-            style={{
-              marginTop: 15,
-              backgroundColor: 'white',
-              borderRadius: 10,
-              padding: 18,
-              width: 0.5 * width,
-            }}
-          >
-            <TouchableOpacity
-              onPress={() =>
-                Alert.alert('Logout', 'Are you sure you want to log out', [
-                  {
-                    text: 'Cancel',
-                  },
-                  {
-                    text: 'OK',
-                    onPress: () => handleLogout(),
-                  },
-                ])
-              }
-            >
-              <Text
-                style={[
-                  styles.headerText,
-                  { fontSize: 18, textAlign: 'center' },
-                ]}
-              >
-                Logout
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-        {renderModal}
-      </ScrollView>
-    ),
-    [email, route?.params?.email, renderModal]
-  )
   React.useEffect(() => {
     const subscription = manager.onStateChange((state) => {
       setBluetoothStatus(state)
@@ -885,14 +526,670 @@ export default function OverviewScreen({ navigation, route }) {
     requestLocationPermission()
   }, [handleFetchMe, requestLocationPermission])
 
+  // React.useEffect(() => {
+  //   let subscription
+  //   if (connectedDevice.length > 0) {
+  //     subscription = manager.monitorCharacteristicForDevice(
+  //       connectedDevice,
+  //       myServiceUUID,
+  //       data_ch,
+  //       (error, char) => {
+  //         if (error) {
+  //           console.log(error.errorCode)
+  //           if (error.errorCode == 201) {
+  //             connectDevice(connectedDevice)
+  //           } else {
+  //             Alert.alert('Alert', `${error.errorCode}: ${error.reason}`)
+  //           }
+  //           return null
+  //         }
+  //         if (char.uuid === data_ch) {
+  //           try {
+  //             // console.log(decode(char.value).charCodeAt(0))
+  //             // let i = 0
+  //             // let str = ''
+  //             // while (i < decode(char.value).length) {
+  //             //   str = str + decode(char.value).charCodeAt(i) + ' '
+  //             //   i = i + 1
+  //             // }
+  //             // console.log(str)
+  //             // setTest(str)
+  //             if (decode(char.value).charCodeAt(0) == 4) {
+  //               if (decode(char.value).charCodeAt(5) === 0) {
+  //                 setIsLoadingData(false)
+  //               }
+  //               const temp =
+  //                 decode(char.value).charCodeAt(1) +
+  //                 decode(char.value).charCodeAt(2) * 0.125
+  //               const cov = decode(char.value).charCodeAt(3)
+  //               const beat = decode(char.value).charCodeAt(4)
+  //               // console.log({ temp, cov, beat })
+  //               setTemperature(temp)
+  //               setCovid(cov)
+  //               setHeartBeat(beat)
+  //               if (decode(char.value).charCodeAt(5) === 2) {
+  //                 setIsRequest(false)
+  //               }
+  //               handleFetchOneMetric({
+  //                 temperature: temp,
+  //                 spo2: cov,
+  //                 heartBeat: beat,
+  //               })
+  //             }
+  //           } catch (error) {
+  //             Alert.alert('Error', error.toString(), [{ text: 'OK' }])
+  //           }
+  //         }
+  //       },
+  //       'monitoring'
+  //     )
+  //     handleSendTimeToHardware(connectedDevice)
+  //   }
+  //   return () => {
+  //     if (subscription) subscription.remove()
+  //   }
+  // }, [manager, connectedDevice])
   React.useEffect(() => {
+    setTimeLastest(null)
     handleFetchingLatest()
   }, [focus])
   return (
     <View style={{ flex: 1 }}>
-      {tab === 'activity' && renderActivity}
-      {tab === 'settings' && renderSettings}
-      {renderDashboard()}
+      {tab === 'activity' && (
+        <ScrollView style={styles.container}>
+          <View style={styles.headerContainer}>
+            <View>
+              <Text style={styles.dateText}>{handleDate()}</Text>
+              <Text style={styles.headerText}>Daily Activity</Text>
+            </View>
+            <Image
+              style={styles.avatarContainer}
+              source={require('../../asset/defaultAvatar.jpg')}
+            />
+          </View>
+          <ScrollView
+            style={styles.currWeek}
+            ref={scrollViewRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            onContentSizeChange={() =>
+              scrollViewRef.current.scrollToEnd({ animated: true })
+            }
+          >
+            {getAWeekAgo().map((item) => {
+              const dateItem = new Date(item)
+              const newKey = `${dateItem.getDate()}/${dateItem.getMonth()}/${dateItem.getFullYear()}`
+              let arr = item.split(' ')
+              return (
+                <TouchableOpacity
+                  key={newKey}
+                  style={[
+                    styles.currWeekBtn,
+                    focus === newKey && { backgroundColor: '#439DEE' },
+                  ]}
+                  onPress={() => setFocus(newKey)}
+                >
+                  <Text
+                    style={[
+                      styles.btnDayText,
+                      focus === newKey && { color: '#212437' },
+                    ]}
+                  >
+                    {arr[0]}
+                  </Text>
+                  <Text style={styles.btnDateText}>{arr[2]}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </ScrollView>
+          <View style={styles.overviewContainer}>
+            <View
+              style={{
+                display: 'flex',
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <View
+                style={{
+                  display: 'flex',
+                  flexDirection: 'row',
+                  justifyContent: 'flex-start',
+                  alignItems: 'flex-end',
+                }}
+              >
+                <Text
+                  style={[
+                    styles.headerText,
+                    {
+                      fontSize: 20,
+                    },
+                  ]}
+                >
+                  Overview
+                </Text>
+              </View>
+              {!isRequest ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    requestData()
+                    setFocus(
+                      `${new Date().getDate()}/${new Date().getMonth()}/${new Date().getFullYear()}`
+                    )
+                  }}
+                >
+                  <Icon name="reload1" type="ant-design" color={'#000'} />
+                </TouchableOpacity>
+              ) : (
+                <ActivityIndicator color="#212437" size={25} />
+              )}
+            </View>
+            <TouchableOpacity
+              style={styles.goDetail}
+              onPress={() =>
+                navigation.navigate('Statistic', {
+                  email: email || route?.params?.email,
+                  date: focus,
+                })
+              }
+            >
+              <View style={styles.overviewComponent}>
+                <Icon
+                  name="temperature-low"
+                  type="font-awesome-5"
+                  color="#1BBBCF"
+                  style={{
+                    width: '30%',
+                  }}
+                  iconStyle={{ fontSize: 30 }}
+                />
+                {isLoadingData ? (
+                  <Text style={styles.headerText}>-</Text>
+                ) : isFetchLastest ? (
+                  <ActivityIndicator color={'212437'} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.headerText,
+                      temperature > 38 && {
+                        color: '#ff0000',
+                      },
+                    ]}
+                  >
+                    {temperature === -1
+                      ? `-`
+                      : temperature === 0
+                      ? 'N/A'
+                      : temperature}
+                  </Text>
+                )}
+                <Text style={styles.btnDayText}>ºC</Text>
+              </View>
+              <View style={styles.overviewComponent}>
+                <Text style={{ fontSize: 20, color: '#70B854' }}>
+                  SpO<Text style={{ fontSize: 13, color: '#70B854' }}>2</Text>
+                </Text>
+                {isLoadingData ? (
+                  <Text style={styles.headerText}>-</Text>
+                ) : isFetchLastest ? (
+                  <ActivityIndicator color={'212437'} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.headerText,
+                      covid < 96 &&
+                        covid > 0 && {
+                          color: '#ff0000',
+                        },
+                    ]}
+                  >
+                    {covid === -1 ? `-` : covid === 0 ? 'N/A' : covid}
+                  </Text>
+                )}
+                <Text style={styles.btnDayText}>%</Text>
+              </View>
+              <View style={styles.overviewComponent}>
+                <Icon
+                  name="heartbeat"
+                  type="font-awesome"
+                  color="#E47272"
+                  style={{
+                    width: '30%',
+                  }}
+                  iconStyle={{ fontSize: 30 }}
+                />
+                {isLoadingData ? (
+                  <Text style={styles.headerText}>-</Text>
+                ) : isFetchLastest ? (
+                  <ActivityIndicator color={'212437'} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.headerText,
+                      (heartBeat > 120 ||
+                        (heartBeat < 50 && heartBeat > 0)) && {
+                        color: '#ff0000',
+                      },
+                    ]}
+                  >
+                    {heartBeat === -1
+                      ? `-`
+                      : heartBeat === 0
+                      ? 'N/A'
+                      : heartBeat}
+                  </Text>
+                )}
+                <Text style={styles.btnDayText}>BPM</Text>
+              </View>
+              {timeLastest && (
+                <Text
+                  style={[
+                    styles.headerText,
+                    {
+                      fontSize: 12,
+                      color: '#8D91BD',
+                      fontStyle: 'italic',
+                      position: 'absolute',
+                      bottom: 5,
+                      right: 10,
+                    },
+                  ]}
+                >
+                  {`at ${moment(timeLastest).format('HH:mm:ss')}`}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <Modal
+            isVisible={modalVisible}
+            onBackdropPress={() => setModalVisible(false)}
+            animationOut="slideOutUp"
+          >
+            <View
+              style={{
+                flex: 1,
+                backgroundColor: '#F4F3F8',
+                padding: 20,
+                paddingTop: 40,
+                alignItems: 'center',
+              }}
+            >
+              <TouchableOpacity
+                style={{ position: 'absolute', right: 10, top: 10 }}
+                onPress={() => setModalVisible(false)}
+              >
+                <Icon name="closecircleo" type="ant-design" color="#ff0000" />
+              </TouchableOpacity>
+              {scanLoading && <ActivityIndicator color="#212437" />}
+              <ScrollView
+                style={{
+                  flex: 1,
+                  width: '100%',
+                  marginTop: 25,
+                }}
+              >
+                {Array.isArray(deviceInfo) &&
+                  deviceInfo.length > 0 &&
+                  deviceInfo.map((item, id) => (
+                    <View
+                      key={id}
+                      style={{
+                        backgroundColor: 'white',
+                        borderRadius: 10,
+                        padding: 10,
+                        display: 'flex',
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: 10,
+                      }}
+                    >
+                      <View>
+                        <View style={styles.deviceInfoRow}>
+                          <Icon
+                            name="perm-device-information"
+                            type="material-icons"
+                            color="#212437"
+                          />
+
+                          <Text style={[styles.headerText, { fontSize: 13 }]}>
+                            {item.id ? `: ${item.id}` : ': Unknown ID'}
+                          </Text>
+                        </View>
+                        <View style={styles.deviceInfoRow}>
+                          <Icon name="user" type="ant-design" color="#212437" />
+                          <Text
+                            style={[styles.headerText, { fontSize: 13 }]}
+                            numberOfLines={1}
+                          >
+                            {item.name
+                              ? item.name.length > 10
+                                ? `: ${item.name.slice(0, 12)}...`
+                                : `: ${item.name}`
+                              : ': ???'}
+                          </Text>
+                        </View>
+                        <View style={styles.deviceInfoRow}>
+                          <Icon
+                            name="signal-cellular-alt"
+                            type="material-icons"
+                            color="#212437"
+                          />
+                          <Text style={[styles.headerText, { fontSize: 13 }]}>
+                            {item.rssi
+                              ? `: ${handleSignal(item.rssi)}`
+                              : `: No signal`}
+                          </Text>
+                        </View>
+                      </View>
+                      <View>
+                        {isConnecting === item.id ? (
+                          <ActivityIndicator
+                            color="#212437"
+                            size={'large'}
+                            style={{ marginRight: 40 }}
+                          />
+                        ) : (
+                          <TouchableOpacity
+                            style={[
+                              styles.connectButton,
+                              connectedDevice === item.id
+                                ? styles.connectedState
+                                : styles.notConnectedState,
+                            ]}
+                            // Không thể connect nếu đang scan
+                            disabled={scanLoading}
+                            onPress={async () => {
+                              if (connectedDevice === item.id) {
+                                disconnectDevice(item.id)
+                              } else {
+                                connectDevice(item.id)
+                              }
+                            }}
+                          >
+                            <Text style={{ color: '#212437', fontSize: 15 }}>
+                              {connectedDevice === item.id
+                                ? 'Disconnect'
+                                : 'Connect'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+              </ScrollView>
+            </View>
+          </Modal>
+        </ScrollView>
+      )}
+      {tab === 'settings' && (
+        <ScrollView style={styles.container}>
+          <View style={styles.headerContainer}>
+            <View>
+              <Text style={styles.dateText}>{handleDate()}</Text>
+              <Text style={styles.headerText}>Settings</Text>
+            </View>
+            <Image
+              style={styles.avatarContainer}
+              source={require('../../asset/defaultAvatar.jpg')}
+            />
+          </View>
+          <View
+            style={[
+              styles.overviewContainer,
+              {
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.headerText,
+                {
+                  fontSize: 20,
+                  opacity: 0.7,
+                },
+              ]}
+            >{`Hi, ${email || route?.params?.email}!`}</Text>
+            <View
+              style={{
+                marginTop: 15,
+                backgroundColor: 'white',
+                borderRadius: 10,
+                padding: 18,
+                width: 0.8 * width,
+              }}
+            >
+              <TouchableOpacity
+                onPress={() => navigation.navigate('ShareData')}
+              >
+                <Text
+                  style={[
+                    styles.headerText,
+                    { fontSize: 18, textAlign: 'center' },
+                  ]}
+                >
+                  Share Data With Others
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View
+              style={{
+                marginTop: 15,
+                backgroundColor: 'white',
+                borderRadius: 10,
+                padding: 18,
+                width: 0.8 * width,
+              }}
+            >
+              <TouchableOpacity
+                onPress={() => navigation.navigate('ChangePassword')}
+              >
+                <Text
+                  style={[
+                    styles.headerText,
+                    { fontSize: 18, textAlign: 'center' },
+                  ]}
+                >
+                  Change Password
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View
+              style={{
+                marginTop: 15,
+                backgroundColor: 'white',
+                borderRadius: 10,
+                padding: 18,
+                width: 0.8 * width,
+              }}
+            >
+              <TouchableOpacity
+                onPress={() =>
+                  Alert.alert('Sign Out', 'Are you sure you want to sign out', [
+                    {
+                      text: 'Cancel',
+                    },
+                    {
+                      text: 'OK',
+                      onPress: () => handleLogout(),
+                    },
+                  ])
+                }
+              >
+                <Text
+                  style={[
+                    styles.headerText,
+                    { fontSize: 18, textAlign: 'center' },
+                  ]}
+                >
+                  Sign Out
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          {
+            <Modal
+              isVisible={modalVisible}
+              onBackdropPress={() => setModalVisible(false)}
+              animationOut="slideOutUp"
+            >
+              <View
+                style={{
+                  flex: 1,
+                  backgroundColor: '#F4F3F8',
+                  padding: 20,
+                  paddingTop: 40,
+                  alignItems: 'center',
+                }}
+              >
+                <TouchableOpacity
+                  style={{ position: 'absolute', right: 10, top: 10 }}
+                  onPress={() => setModalVisible(false)}
+                >
+                  <Icon name="closecircleo" type="ant-design" color="#ff0000" />
+                </TouchableOpacity>
+
+                {scanLoading && <ActivityIndicator color="#212437" />}
+                <ScrollView
+                  style={{
+                    flex: 1,
+                    width: '100%',
+                    marginTop: 25,
+                  }}
+                >
+                  {Array.isArray(deviceInfo) &&
+                    deviceInfo.length > 0 &&
+                    deviceInfo.map((item, id) => (
+                      <View
+                        key={id}
+                        style={{
+                          backgroundColor: 'white',
+                          borderRadius: 10,
+                          padding: 10,
+                          display: 'flex',
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: 10,
+                        }}
+                      >
+                        <View>
+                          <View style={styles.deviceInfoRow}>
+                            <Icon
+                              name="perm-device-information"
+                              type="material-icons"
+                              color="#212437"
+                            />
+
+                            <Text style={[styles.headerText, { fontSize: 13 }]}>
+                              {item.id ? `: ${item.id}` : ': Unknown ID'}
+                            </Text>
+                          </View>
+                          <View style={styles.deviceInfoRow}>
+                            <Icon
+                              name="user"
+                              type="ant-design"
+                              color="#212437"
+                            />
+                            <Text
+                              style={[styles.headerText, { fontSize: 13 }]}
+                              numberOfLines={1}
+                            >
+                              {item.name
+                                ? item.name.length > 10
+                                  ? `: ${item.name.slice(0, 12)}...`
+                                  : `: ${item.name}`
+                                : ': ???'}
+                            </Text>
+                          </View>
+                          <View style={styles.deviceInfoRow}>
+                            <Icon
+                              name="signal-cellular-alt"
+                              type="material-icons"
+                              color="#212437"
+                            />
+                            <Text style={[styles.headerText, { fontSize: 13 }]}>
+                              {item.rssi
+                                ? `: ${handleSignal(item.rssi)}`
+                                : `: No signal`}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={{ height: '100%' }}>
+                          <TouchableOpacity
+                            style={[
+                              styles.connectButton,
+                              connectedDevice === item.id
+                                ? styles.connectedState
+                                : styles.notConnectedState,
+                            ]}
+                            // Không thể connect nếu đang scan
+                            disabled={scanLoading}
+                            onPress={() => {
+                              if (connectedDevice === item.id) {
+                                disconnectDevice(item.id)
+                              } else {
+                                connectDevice(item.id)
+                              }
+                            }}
+                          >
+                            {isConnecting === item.id ? (
+                              <ActivityIndicator color="#212437" />
+                            ) : (
+                              <Text style={{ color: '#212437', fontSize: 15 }}>
+                                {connectedDevice === item.id
+                                  ? 'Disconnect'
+                                  : 'Connect'}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                </ScrollView>
+              </View>
+            </Modal>
+          }
+        </ScrollView>
+      )}
+      <View style={styles.dashboardContainer}>
+        <TouchableOpacity onPress={() => setTab('activity')}>
+          <Icon
+            name="activity"
+            type="feather"
+            color={tab === 'activity' ? '#439DEE' : '#70789C'}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{
+            backgroundColor: '#439DEE',
+            borderRadius: 20,
+            width: 0.9 * 0.1 * height,
+            height: '90%',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+          onPress={() => {
+            setModalVisible(true)
+            scanDevice()
+          }}
+        >
+          <Icon name="plus" type="feather" color="#212437" />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setTab('settings')}>
+          <Icon
+            name="settings"
+            type="feather"
+            color={tab === 'settings' ? '#439DEE' : '#70789C'}
+          />
+        </TouchableOpacity>
+      </View>
     </View>
   )
 }
@@ -971,7 +1268,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     padding: 25,
-    height: 0.2 * height,
+    height: 0.23 * height,
   },
   overviewComponent: {
     flex: 1,
